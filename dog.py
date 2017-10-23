@@ -20,25 +20,28 @@ def _parse_function(filename, label):
  return image_resized, l
 
 
-file_name_tensor = tf.train.match_filenames_once("./train/*.jpg")
+#file_name_tensor = tf.train.match_filenames_once("./train/*.jpg")
 init = (tf.global_variables_initializer(), tf.local_variables_initializer())
-l = pd.read_csv('labels.csv', usecols=[1] ,header=None)
+l = pd.read_csv('labels.csv',header=None)
+l_shuffled = l.reindex(np.random.permutation(l.index))
 labs = []
-for s in l.values:
+file_name_list = []
+for s in l_shuffled.values:
  i = 0
+ file_name_list.append("./train/"+s[0]+".jpg")
  for s2 in label_lookup:
-  if s == s2:
+  if s[1] == s2:
    labs.append(i)
    break
   i = i + 1
 with tf.Session() as sess:
  sess.run(init)
- file_name_list = file_name_tensor.eval()
+ #file_name_list = file_name_tensor.eval()
  filenames = tf.constant(file_name_list)
  labels = tf.constant(labs)
  dataset = tf.contrib.data.Dataset.from_tensor_slices((filenames, labels))
- dataset = dataset.map(_parse_function)
- shuffle_ds = dataset.shuffle(BATCH_SIZE)
+ dataset = dataset.map(_parse_function, 4, 100*BATCH_SIZE)
+ #shuffle_ds = dataset.shuffle(BATCH_SIZE)
  batch = dataset.batch(BATCH_SIZE)
  iterator = batch.make_one_shot_iterator()
  next_element = iterator.get_next()
