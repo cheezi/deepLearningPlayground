@@ -36,24 +36,40 @@ label_lookup = ['affenpinscher', 'afghan_hound', 'african_hunting_dog', 'airedal
                 'west_highland_white_terrier', 'whippet', 'wire-haired_fox_terrier', 'yorkshire_terrier']
 
 
-def _parse_function(filename, label):
-    image_string = tf.read_file(filename)
-    image_decoded = tf.image.decode_jpeg(image_string)
-    image_gray = tf.image.rgb_to_grayscale(image_decoded)
-    # print(image_decoded.shape)
-    image_resized = tf.image.resize_images(image_gray, [28, 28])
-    image_normalized = tf.image.per_image_standardization(image_resized)
-    image_reshaped = tf.reshape(image_normalized, [-1])
-    # print(image_resized.shape)
-    l = tf.one_hot(label, 120)
-    return image_reshaped, l
 
+
+def train_input_fn(file_name_list, labs, batch_size):
+    def _parse_function(filename, label):
+        image_string = tf.read_file(filename)
+        image_decoded = tf.image.decode_jpeg(image_string)
+        image_gray = tf.image.rgb_to_grayscale(image_decoded)
+        # print(image_decoded.shape)
+        image_resized = tf.image.resize_images(image_gray, [28, 28])
+        image_normalized = tf.image.per_image_standardization(image_resized)
+        image_reshaped = tf.reshape(image_normalized, [-1])
+        # print(image_resized.shape)
+        l = tf.one_hot(label, 120)
+        d = dict(zip(['image'], [image_reshaped])), [l]
+        return d
+    filenames = tf.constant(file_name_list)
+    labels = tf.constant(labs)
+    dataset = tf.contrib.data.Dataset.from_tensor_slices((filenames, labels))
+    dataset = dataset.map(_parse_function, 4, 100 * BATCH_SIZE)
+    dataset = dataset.shuffle(buffer_size=256)
+    dataset = dataset.repeat(EPOCHS)
+    dataset = dataset.batch(BATCH_SIZE)
+    iterator = dataset.make_one_shot_iterator()
+    batch_features, batch_labels = iterator.get_next()
+    return batch_features, batch_labels
 
 # file_name_tensor = tf.train.match_filenames_once("./train/*.jpg")
+print("read csv")
 l = pd.read_csv('labels.csv', header=None)
+print("shuffle index")
 l_shuffled = l.reindex(np.random.permutation(l.index))
 labs = []
 file_name_list = []
+print("build labels")
 for s in l_shuffled.values:
     i = 0
     file_name_list.append("./train/" + s[0] + ".jpg")
@@ -62,17 +78,8 @@ for s in l_shuffled.values:
             labs.append(i)
             break
         i = i + 1
+print("session")
 with tf.Session() as sess:
-    # file_name_list = file_name_tensor.eval()
-    filenames = tf.constant(file_name_list)
-    labels = tf.constant(labs)
-    dataset = tf.contrib.data.Dataset.from_tensor_slices((filenames, labels))
-    dataset = dataset.map(_parse_function, 4, 100 * BATCH_SIZE)
-    #dataset = dataset.shuffle(DS_SIZE)
-    #dataset = dataset.repeat(EPOCHS);
-    dataset = dataset.batch(BATCH_SIZE)
-    iterator = dataset.make_initializable_iterator()
-    next_batch = iterator.get_next()
     x = tf.placeholder(tf.float32, [None, 784])
     W = tf.Variable(tf.zeros([784, 120]))
     b = tf.Variable(tf.zeros([120]))
@@ -82,10 +89,13 @@ with tf.Session() as sess:
         tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
     train_step = tf.train.GradientDescentOptimizer(0.5).minimize(cross_entropy)
     init = (tf.global_variables_initializer(), tf.local_variables_initializer())
+    print("run init")
     sess.run(init)
+    print("run init done")
     start = time.time()
     j = 0
     for i in range(EPOCHS):
+        print("run iterator.initializer")
         sess.run(iterator.initializer)
         print("epoch " + str(i))
         for k in range(int(DS_SIZE / BATCH_SIZE)):
