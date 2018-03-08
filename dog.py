@@ -38,7 +38,7 @@ label_lookup = ['affenpinscher', 'afghan_hound', 'african_hunting_dog', 'airedal
 
 
 
-def train_input_fn(file_name_list, labs, batch_size):
+def imgs_input_fn(file_name_list, labs, perform_shuffle=False, repeat_count=1, batch_size=1):
     def _parse_function(filename, label):
         image_string = tf.read_file(filename)
         image_decoded = tf.image.decode_jpeg(image_string)
@@ -49,18 +49,44 @@ def train_input_fn(file_name_list, labs, batch_size):
         image_reshaped = tf.reshape(image_normalized, [-1])
         # print(image_resized.shape)
         l = tf.one_hot(label, 120)
-        d = dict(zip(['image'], [image_reshaped])), [l]
+        d = image_reshaped, l
         return d
     filenames = tf.constant(file_name_list)
     labels = tf.constant(labs)
-    dataset = tf.contrib.data.Dataset.from_tensor_slices((filenames, labels))
-    dataset = dataset.map(_parse_function, 4, 100 * BATCH_SIZE)
-    dataset = dataset.shuffle(buffer_size=256)
-    dataset = dataset.repeat(EPOCHS)
-    dataset = dataset.batch(BATCH_SIZE)
+    dataset = tf.data.Dataset.from_tensor_slices((filenames, labels))
+    dataset = dataset.map(_parse_function)
+    if perform_shuffle:
+        dataset = dataset.shuffle(buffer_size=256)
+    dataset = dataset.repeat(repeat_count)
+    dataset = dataset.batch(batch_size)
     iterator = dataset.make_one_shot_iterator()
     batch_features, batch_labels = iterator.get_next()
-    return batch_features, batch_labels
+    return {'image' : batch_features}, batch_labels
+
+def my_model_fn(features, labels, mode):
+    input_layer = features['image']
+    logits = tf.layers.dense(inputs=input_layer, units=120)
+    classes = tf.argmax(input=logits, axis=1)
+    predictions = {
+      "classes": classes,
+      "probabilities": tf.nn.softmax(logits, name="softmax_tensor"),
+      "accuracy": tf.metrics.accuracy(tf.arg_max(labels, 1),classes,name="train_accuracy")
+   }
+
+    if mode == tf.estimator.ModeKeys.PREDICT:
+        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
+
+    loss = tf.losses.softmax_cross_entropy(onehot_labels=labels, logits=logits)
+    if mode == tf.estimator.ModeKeys.TRAIN:
+        optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
+        train_op = optimizer.minimize(loss=loss, global_step=tf.train.get_global_step())
+        return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
+
+    eval_metric_ops = {
+      "accuracy": tf.metrics.accuracy(tf.arg_max(labels, 1),classes,name="train_accuracy")
+    }
+    return tf.estimator.EstimatorSpec(mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
+
 
 # file_name_tensor = tf.train.match_filenames_once("./train/*.jpg")
 print("read csv")
@@ -79,40 +105,48 @@ for s in l_shuffled.values:
             break
         i = i + 1
 print("session")
-with tf.Session() as sess:
-    x = tf.placeholder(tf.float32, [None, 784])
-    W = tf.Variable(tf.zeros([784, 120]))
-    b = tf.Variable(tf.zeros([120]))
-    y = tf.matmul(x, W) + b
-    y_ = tf.placeholder(tf.float32, [None, 120])
-    cross_entropy = tf.reduce_mean(
-        tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
-    train_step = tf.train.GradientDescentOptimizer(0.5).minimize(cross_entropy)
-    init = (tf.global_variables_initializer(), tf.local_variables_initializer())
-    print("run init")
-    sess.run(init)
-    print("run init done")
-    start = time.time()
-    j = 0
-    for i in range(EPOCHS):
-        print("run iterator.initializer")
-        sess.run(iterator.initializer)
-        print("epoch " + str(i))
-        for k in range(int(DS_SIZE / BATCH_SIZE)):
-            try:
-                j = j + 1
-                data, labels = sess.run(next_batch)
-                sess.run(train_step, feed_dict={x: data,
-                                                y_: labels})
-                end = time.time()
-                print("Time elapsed: " + str((end-start)) + " per Batch: " + str((end-start)/(j+1)) + " remaining: " + str(((ITERATIONS - j) * (end - start))/(j+1)) )
-            except tf.errors.OutOfRangeError:
-                break
-        data, labels = sess.run(next_batch)
-        correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
-        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        print("Accuracy: " + str(sess.run(accuracy, feed_dict={x: data,
-                                                y_: labels})))
+tf.logging.set_verbosity(tf.logging.INFO)
+dog_classifier = tf.estimator.Estimator(model_fn=my_model_fn, model_dir="C:\\Users\\mjanz\\PycharmProjects\\deepLearningPlayground\\model")
+tensors_to_log = {"probabilities": "softmax_tensor",
+                  "accuracy": "train_accuracy"}
+logging_hook = tf.train.LoggingTensorHook(tensors=tensors_to_log, every_n_iter=50)
+train_input_fn = lambda: imgs_input_fn(file_name_list, labs=labs, perform_shuffle=True,repeat_count=1, batch_size=20)
+dog_classifier.train(input_fn=train_input_fn, steps=20000, hooks=[logging_hook])
+
+# with tf.Session() as sess:
+#     x = tf.placeholder(tf.float32, [None, 784])
+#     W = tf.Variable(tf.zeros([784, 120]))
+#     b = tf.Variable(tf.zeros([120]))
+#     y = tf.matmul(x, W) + b
+#     y_ = tf.placeholder(tf.float32, [None, 120])
+#     cross_entropy = tf.reduce_mean(
+#         tf.nn.softmax_cross_entropy_with_logits(labels=y_, logits=y))
+#     train_step = tf.train.GradientDescentOptimizer(0.5).minimize(cross_entropy)
+#     init = (tf.global_variables_initializer(), tf.local_variables_initializer())
+#     print("run init")
+#     sess.run(init)
+#     print("run init done")
+#     start = time.time()
+#     j = 0
+#     for i in range(EPOCHS):
+#         print("run iterator.initializer")
+#         sess.run(iterator.initializer)
+#         print("epoch " + str(i))
+#         for k in range(int(DS_SIZE / BATCH_SIZE)):
+#             try:
+#                 j = j + 1
+#                 data, labels = sess.run(next_batch)
+#                 sess.run(train_step, feed_dict={x: data,
+#                                                 y_: labels})
+#                 end = time.time()
+#                 print("Time elapsed: " + str((end-start)) + " per Batch: " + str((end-start)/(j+1)) + " remaining: " + str(((ITERATIONS - j) * (end - start))/(j+1)) )
+#             except tf.errors.OutOfRangeError:
+#                 break
+#         data, labels = sess.run(next_batch)
+#         correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
+#         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+#         print("Accuracy: " + str(sess.run(accuracy, feed_dict={x: data,
+#                                                 y_: labels})))
 
 # for i in range(1):
 #  data2D = np.squeeze(data[0][i])
