@@ -41,15 +41,15 @@ label_lookup = ['affenpinscher', 'afghan_hound', 'african_hunting_dog', 'airedal
 def imgs_input_fn(file_name_list, labs, perform_shuffle=False, repeat_count=1, batch_size=1):
     def _parse_function(filename, label):
         image_string = tf.read_file(filename)
-        image_decoded = tf.image.decode_jpeg(image_string)
+        image_decoded = tf.image.decode_jpeg(image_string, channels=3)
         image_gray = tf.image.rgb_to_grayscale(image_decoded)
         # print(image_decoded.shape)
-        image_resized = tf.image.resize_images(image_gray, [28, 28])
+        image_resized = tf.image.resize_images(image_decoded, [56, 56])
         image_normalized = tf.image.per_image_standardization(image_resized)
         image_reshaped = tf.reshape(image_normalized, [-1])
         # print(image_resized.shape)
         l = tf.one_hot(label, 120)
-        d = image_reshaped, l
+        d = image_normalized, l
         return d
     filenames = tf.constant(file_name_list)
     labels = tf.constant(labs)
@@ -65,12 +65,26 @@ def imgs_input_fn(file_name_list, labs, perform_shuffle=False, repeat_count=1, b
 
 def my_model_fn(features, labels, mode):
     input_layer = features['image']
-    logits = tf.layers.dense(inputs=input_layer, units=120)
+    print(input_layer.get_shape())
+    conv1 = tf.layers.conv2d(inputs=input_layer, filters=32, kernel_size=[5, 5], data_format='channels_last', padding="same", activation=tf.nn.relu)
+    print(conv1.get_shape())
+    pool1 = tf.layers.max_pooling2d(inputs=conv1, pool_size=[2, 2], strides=2)
+    print(pool1.get_shape())
+    conv2 = tf.layers.conv2d(inputs=pool1, filters=64, kernel_size=[5, 5], padding="same", activation=tf.nn.relu)
+    print(conv2.get_shape())
+    pool2 = tf.layers.max_pooling2d(inputs=conv2, pool_size=[2, 2], strides=2)
+    print(pool2.get_shape())
+
+    pool2_flat = tf.reshape(pool2, [-1, 20*14*14*64])
+    dense = tf.layers.dense(inputs=pool2_flat, units=1024, activation=tf.nn.relu)
+
+    dropout = tf.layers.dropout(inputs=dense, rate=0.4, training=mode == tf.estimator.ModeKeys.TRAIN)
+
+    logits = tf.layers.dense(inputs=dropout, units=120)
     classes = tf.argmax(input=logits, axis=1)
     predictions = {
       "classes": classes,
-      "probabilities": tf.nn.softmax(logits, name="softmax_tensor"),
-      "accuracy": tf.metrics.accuracy(tf.arg_max(labels, 1),classes,name="train_accuracy")
+      "probabilities": tf.nn.softmax(logits, name="softmax_tensor")
    }
 
     if mode == tf.estimator.ModeKeys.PREDICT:
@@ -83,7 +97,7 @@ def my_model_fn(features, labels, mode):
         return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
 
     eval_metric_ops = {
-      "accuracy": tf.metrics.accuracy(tf.arg_max(labels, 1),classes,name="train_accuracy")
+      "accuracy": tf.metrics.accuracy(tf.argmax(labels, 1),classes,name="train_accuracy")
     }
     return tf.estimator.EstimatorSpec(mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
 
@@ -107,12 +121,17 @@ for s in l_shuffled.values:
 print("session")
 tf.logging.set_verbosity(tf.logging.INFO)
 dog_classifier = tf.estimator.Estimator(model_fn=my_model_fn, model_dir="C:\\Users\\mjanz\\PycharmProjects\\deepLearningPlayground\\model")
-tensors_to_log = {"probabilities": "softmax_tensor",
-                  "accuracy": "train_accuracy"}
+tensors_to_log = {"probabilities": "softmax_tensor"}
 logging_hook = tf.train.LoggingTensorHook(tensors=tensors_to_log, every_n_iter=50)
-train_input_fn = lambda: imgs_input_fn(file_name_list, labs=labs, perform_shuffle=True,repeat_count=1, batch_size=20)
+train_filenames = file_name_list[:int(DS_SIZE*0.9)]
+train_labels = labs[:int(DS_SIZE*0.9)]
+eval_filenames = file_name_list[int(DS_SIZE*0.9):]
+eval_labels = labs[int(DS_SIZE*0.9):]
+train_input_fn = lambda: imgs_input_fn(train_filenames, labs=train_labels, perform_shuffle=True,repeat_count=1, batch_size=20)
 dog_classifier.train(input_fn=train_input_fn, steps=20000, hooks=[logging_hook])
-
+eval_input_fn = lambda: imgs_input_fn(eval_filenames, labs=eval_labels, perform_shuffle=False,repeat_count=1, batch_size=1)
+eval_results = dog_classifier.evaluate(input_fn=eval_input_fn)
+print(eval_results)
 # with tf.Session() as sess:
 #     x = tf.placeholder(tf.float32, [None, 784])
 #     W = tf.Variable(tf.zeros([784, 120]))
